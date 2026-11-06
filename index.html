@@ -2,7 +2,7 @@
 <html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light"><meta name="theme-color" content="#6d233e">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-xuxGnJz3sS5g/oHlLmwYEqaXmy8hiNhCWfdQkOk4du0=' 'sha256-fze4VuCOtiAklE+kq08D5jOGcDrLXnbNJqZ/ehjCYJE=' 'sha256-fUHMA8Twct+mywKm65w7SAD4Bi2boNQraQWBJ9EHvYs=' 'sha256-LVu6d+0qSEo1CENVRjLW+k1+wFcfJ3LtcA5H6aykt2o='; style-src 'unsafe-inline'; font-src data:; img-src data:; connect-src https://cloud-api.yandex.net https://*.yandex.net https://*.yandex.ru https://*.yandex.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-6mkxyEQuCLUQFWS0kmXL7bQc5vCumDg03D9JSRiaQ8E=' 'sha256-fze4VuCOtiAklE+kq08D5jOGcDrLXnbNJqZ/ehjCYJE=' 'sha256-fUHMA8Twct+mywKm65w7SAD4Bi2boNQraQWBJ9EHvYs=' 'sha256-vaD/bSq2yfvY/NF9ykQuhn2EdKXLcMBijZx6CcBAxjU='; style-src 'unsafe-inline'; font-src data:; img-src data:; connect-src https://cloud-api.yandex.net https://*.yandex.net https://*.yandex.ru https://*.yandex.com; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Мой ритм — питание, расходы и привычки</title>
 <!-- Embedded Caveat font license:
 Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat)
@@ -126,61 +126,41 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 <script>(function(root){
   'use strict';
   const CLIENT='d8071d5b1876451cb0db8c325f2010f0',PENDING='my-rhythm:web:oauth-pending';
-  function parseReturn(url,pending,now=Date.now()){
-    const u=new URL(url),p=u.searchParams;
-    if(!p.has('code')&&!p.has('error'))return null;
-    if(!pending||!pending.state||p.get('state')!==pending.state||!Number.isFinite(pending.at)||now-pending.at>30*60*1000||now<pending.at)
-      throw Error('Вход не подтверждён. Нажми «Войти через Яндекс» ещё раз в этой вкладке.');
-    if(p.has('error'))throw Error('Подключение отменено. Твои записи остаются на Яндекс Диске.');
-    const code=p.get('code');
-    if(!code||code.length>2048||/\s/.test(code)||!/^[a-f0-9]{64}$/.test(pending.verifier))throw Error('Яндекс не подтвердил вход. Попробуй войти ещё раз.');
-    return {code,verifier:pending.verifier,remember:pending.remember===true,page:['calories','expenses','habits'].includes(pending.page)?pending.page:'calories'};
+  function validatePending(p,now=Date.now()){
+    if(!p||!Number.isFinite(p.at)||now-p.at>30*60*1000||now<p.at||!/^[a-f0-9]{64}$/.test(p.verifier))throw Error('Время входа истекло. Получи новый код Яндекса.');
+    return p;
   }
   function create(env){
-    let returned=null,error='';
-    const incoming=new URL(env.location.href).searchParams;
-    if(incoming.has('code')||incoming.has('error')){
-      // Erase credentials from the address before the rest of the application runs.
-      const raw=env.location.href;
-      env.history.replaceState(null,'',new URL('./',raw).href);
-      try{
-        const pending=JSON.parse(env.storage.getItem(PENDING)||'null');
-        env.storage.removeItem(PENDING);
-        returned=parseReturn(raw,pending);
-        env.history.replaceState(null,'','#'+returned.page);
-      }catch(e){error=e.message;try{env.storage.removeItem(PENDING)}catch(ignore){}}
-    }
     return {
-      get error(){return error},
-      async take(){
-        const value=returned;returned=null;if(!value)return null;
-        try{
-          const body=new URLSearchParams({grant_type:'authorization_code',code:value.code,client_id:CLIENT,code_verifier:value.verifier});
-          const response=await env.fetch('https://oauth.yandex.ru/token',{method:'POST',body,credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-          if(!response.ok)throw Error('Яндекс не подтвердил подключение. Нажми «Войти через Яндекс» ещё раз.');
-          const data=await response.json();
-          if(typeof data.access_token!=='string'||data.access_token.length<20||data.access_token.length>2048||/\s/.test(data.access_token)||data.token_type?.toLowerCase()!=='bearer')throw Error('Ответ Яндекса не распознан. Попробуй войти ещё раз.');
-          return {token:data.access_token,remember:value.remember,page:value.page};
-        }catch(e){error=e.message||'Не удалось завершить вход в Яндекс.';throw Error(error)}
-      },
       async start(remember,page){
-        const redirect=new URL('./',env.location.href);
-        if(redirect.protocol!=='https:')throw Error('Вход через Яндекс доступен по опубликованной защищённой ссылке.');
-        const state=Array.from(env.crypto.getRandomValues(new Uint8Array(32)),x=>x.toString(16).padStart(2,'0')).join('');
         const verifier=Array.from(env.crypto.getRandomValues(new Uint8Array(32)),x=>x.toString(16).padStart(2,'0')).join('');
         const hash=await env.crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier));
         const challenge=btoa(String.fromCharCode(...new Uint8Array(hash))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
-        env.storage.setItem(PENDING,JSON.stringify({state,verifier,remember:!!remember,page,at:Date.now()}));
+        const state=Array.from(env.crypto.getRandomValues(new Uint8Array(32)),x=>x.toString(16).padStart(2,'0')).join('');
+        env.storage.setItem(PENDING,JSON.stringify({verifier,remember:!!remember,page,at:Date.now()}));
         const url=new URL('https://oauth.yandex.ru/authorize');
-        for(const [k,v]of Object.entries({response_type:'code',client_id:CLIENT,redirect_uri:redirect.href,state,force_confirm:'yes',code_challenge:challenge,code_challenge_method:'S256'}))url.searchParams.set(k,v);
-        env.location.assign(url.href);
+        for(const [k,v]of Object.entries({response_type:'code',client_id:CLIENT,redirect_uri:'https://oauth.yandex.ru/verification_code',state,force_confirm:'yes',code_challenge:challenge,code_challenge_method:'S256'}))url.searchParams.set(k,v);
+        return url.href;
+      },
+      async finish(code){
+        const value=validatePending(JSON.parse(env.storage.getItem(PENDING)||'null'));
+        code=String(code).trim();if(!/^[A-Za-z0-9_-]{3,2048}$/.test(code))throw Error('Вставь только код подтверждения, без адреса страницы.');
+        const body=new URLSearchParams({grant_type:'authorization_code',code,client_id:CLIENT,code_verifier:value.verifier});
+        let response;
+        try{response=await env.fetch('https://oauth.yandex.ru/token',{method:'POST',body,credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/x-www-form-urlencoded'}})}
+        catch(e){throw Error('Не удалось связаться с Яндексом. Проверь интернет и повтори подключение.')}
+        if(!response.ok)throw Error('Код не подошёл или истёк. Получи новый код и попробуй ещё раз.');
+        const data=await response.json();
+        if(typeof data.access_token!=='string'||data.access_token.length<20||data.access_token.length>2048||/\s/.test(data.access_token)||data.token_type?.toLowerCase()!=='bearer')throw Error('Ответ Яндекса не распознан. Попробуй войти ещё раз.');
+        env.storage.removeItem(PENDING);
+        return {token:data.access_token,remember:value.remember,page:value.page};
       }
     };
   }
-  if(typeof module!=='undefined')module.exports={parseReturn,create};
+  if(typeof module!=='undefined')module.exports={validatePending,create};
   if(root.document){
-    try{root.PlannerAuth=create({location:root.location,history:root.history,storage:root.sessionStorage,crypto:root.crypto,fetch:root.fetch.bind(root)})}
-    catch(e){root.PlannerAuth={error:'Браузер запретил сохранение подключения. Разреши хранение данных для этого сайта.',take:()=>null,start:()=>{throw e}}}
+    try{root.PlannerAuth=create({storage:root.sessionStorage,crypto:root.crypto,fetch:root.fetch.bind(root)})}
+    catch(e){root.PlannerAuth={start:async()=>{throw Error('Разреши хранение данных для этого сайта.')},finish:async()=>{throw e}}}
   }
 })(globalThis);
 </script>
@@ -528,7 +508,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
   }
   function welcome(){
     document.querySelector('.top-actions').hidden=true;
-    const status=PlannerAuth.error||cloud?.status.text||'';
+    const status=cloud?.status.text||'';
     app.innerHTML='<section class="welcome panel"><div class="eyebrow">Твоё пространство на каждый день</div><h1>Мой <em>ритм</em></h1><div class="hand">с заботой о себе</div><p class="subtitle">Питание, расходы и привычки — всё в одном месте.</p><div class="welcome-topics"><span>01 · Калории</span><span>02 · Расходы</span><span>03 · Привычки</span></div><p class="welcome-copy">Подключи свой Яндекс Диск, чтобы открыть сохранённые записи на этом устройстве.</p>'+signInControls()+'<p id="welcome-status" class="cloud-status" role="status">'+esc(status)+'</p>'+(cloud?.token?btn(cloud.conflict?'Выбрать сохранённую версию':'Проверить подключение','cloud','soft'):'')+'<p class="help tiny">На общем устройстве сними галочку. Не закрывай страницу, пока изменения сохраняются на Диск.</p></section>';
   }
   function subnav(items){return '<nav class="subnav" aria-label="Виды раздела">'+items.map(([id,t])=>'<button type="button" data-act="tab" data-id="'+id+'" class="'+(ui.tabs[ui.page]===id?'active':'')+'" aria-pressed="'+(ui.tabs[ui.page]===id)+'">'+t+'</button>').join('')+'</nav>'}
@@ -739,12 +719,29 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     form.elements.token.value='';dialog.close();
     try{await cloud.connect(token,remember);cloudDialog()}catch(e){toast(e.message);cloudDialog()}
   }
+  async function signIn(){
+    const remember=document.getElementById('remember-yandex')?.checked===true;
+    try{
+      const url=await PlannerAuth.start(remember,ui.page);
+      openDialog('Вход через Яндекс','<p class="help">Один раз подтверди подключение на этом устройстве. Пароль вводится только на странице Яндекса.</p><p style="margin:20px 0"><a class="btn soft" href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">1. Получить код в Яндексе ↗</a></p><p class="help">Выбери свой аккаунт. Скопируй код, который покажет Яндекс, затем вернись в эту вкладку.</p>'+field('2. Код подтверждения','code','','text','required autocomplete="one-time-code" spellcheck="false" maxlength="2048"')+'<p class="help">'+(remember?'Вход запомнится на этом устройстве.':'Вход сохранится до закрытия этой вкладки.')+'</p>','yandex-code',false,'Подключить ежедневник');
+    }catch(e){toast(e.message)}
+  }
+  async function confirmCode(form){
+    const button=form.querySelector('[type="submit"]');if(button)button.disabled=true;
+    try{
+      const auth=await PlannerAuth.finish(form.elements.code.value);form.elements.code.value='';
+      sessionStorage.setItem(KEY+':yandex-session-token',auth.token);dialog.close();
+      await cloud.connect(auth.token,auth.remember);
+      if(cloud.status.kind!=='synced')cloudDialog();
+    }catch(e){toast(e.message)}finally{if(button)button.disabled=false}
+  }
   const number=(f,n,nullable=false)=>{const v=f.get(n);return nullable&&(v===''||v===null)?null:Number(v)};
   function handleSubmit(event){
     const form=event.target;if(!form.matches('[data-form]'))return;
     event.preventDefault();if(!form.reportValidity())return;
     const f=new FormData(form),type=form.dataset.form;
     if(type==='cloud-connect'){connectCloud(form);return}
+    if(type==='yandex-code'){confirmCode(form);return}
     try{
       if(type==='confirm'){const action=dialogAfterSave;dialogAfterSave=null;dialog.close();action?.();return}
       if(type==='food'){
@@ -804,7 +801,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     if(a==='profile')profileDialog();
     if(a==='backup')backupDialog();
     if(a==='cloud')cloudDialog();
-    if(a==='yandex-signin'){try{PlannerAuth.start(document.getElementById('remember-yandex')?.checked===true,ui.page).catch(e=>toast(e.message))}catch(e){toast(e.message)}}
+    if(a==='yandex-signin')signIn();
     if(a==='cloud-sync'){cloud.retry().then(()=>{if(dialog.open)cloudDialog()});}
     if(a==='cloud-off'){try{cloud.disconnect();cloudDialog()}catch(e){toast(e.message)}}
     if(a==='cloud-local'||a==='cloud-pick'){
@@ -941,11 +938,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     onStatus:()=>{renderStorage();if(!hasLocal)welcome()}
   });
   renderStorage();
-  (async()=>{try{
-    const auth=await PlannerAuth.take(),remembered=localStorage.getItem(KEY+':yandex-token'),session=sessionStorage.getItem(KEY+':yandex-session-token');
-    if(auth){sessionStorage.setItem(KEY+':yandex-session-token',auth.token);if(!storageBlocked)cloud.connect(auth.token,auth.remember).catch(()=>{})}
-    else if((remembered||session)&&!storageBlocked)cloud.connect(remembered||session,!!remembered).catch(()=>{});
-  }catch(e){if(!hasLocal)welcome();toast(PlannerAuth.error||'Не удалось сохранить подключение в браузере. Разреши хранение данных для этого сайта.')}})();
+  try{
+    const remembered=localStorage.getItem(KEY+':yandex-token'),session=sessionStorage.getItem(KEY+':yandex-session-token');
+    if((remembered||session)&&!storageBlocked)cloud.connect(remembered||session,!!remembered).catch(()=>{});
+  }catch(e){toast('Не удалось сохранить подключение в браузере. Разреши хранение данных для этого сайта.')}
   window.addEventListener('online',()=>cloud.retry());
   window.addEventListener('focus',()=>cloud.retry());
   setInterval(()=>{if(document.visibilityState==='visible')cloud.retry()},60000);
