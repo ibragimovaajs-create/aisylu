@@ -2,7 +2,7 @@
 <html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light"><meta name="theme-color" content="#6d233e">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-6mkxyEQuCLUQFWS0kmXL7bQc5vCumDg03D9JSRiaQ8E=' 'sha256-fze4VuCOtiAklE+kq08D5jOGcDrLXnbNJqZ/ehjCYJE=' 'sha256-fUHMA8Twct+mywKm65w7SAD4Bi2boNQraQWBJ9EHvYs=' 'sha256-vaD/bSq2yfvY/NF9ykQuhn2EdKXLcMBijZx6CcBAxjU='; style-src 'unsafe-inline'; font-src data:; img-src data:; connect-src https://cloud-api.yandex.net https://*.yandex.net https://*.yandex.ru https://*.yandex.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-csuRfDXsFqXOwTrRtkuoe5NINEHn8xwfOUPxkefAQXc=' 'sha256-fze4VuCOtiAklE+kq08D5jOGcDrLXnbNJqZ/ehjCYJE=' 'sha256-fUHMA8Twct+mywKm65w7SAD4Bi2boNQraQWBJ9EHvYs=' 'sha256-vaD/bSq2yfvY/NF9ykQuhn2EdKXLcMBijZx6CcBAxjU='; style-src 'unsafe-inline'; font-src data:; img-src data:; connect-src https://cloud-api.yandex.net https://*.yandex.net https://*.yandex.ru https://*.yandex.com; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Мой ритм — питание, расходы и привычки</title>
 <!-- Embedded Caveat font license:
 Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat)
@@ -133,7 +133,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
   function create(env){
     return {
       async start(remember,page){
-        const verifier=Array.from(env.crypto.getRandomValues(new Uint8Array(32)),x=>x.toString(16).padStart(2,'0')).join('');
+        let previous=null;
+        try{previous=validatePending(JSON.parse(env.storage.getItem(PENDING)||'null'))}catch(e){}
+        // Reopening the dialog must retain the verifier bound to an issued code.
+        const verifier=previous?.verifier||Array.from(env.crypto.getRandomValues(new Uint8Array(32)),x=>x.toString(16).padStart(2,'0')).join('');
         const hash=await env.crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier));
         const challenge=btoa(String.fromCharCode(...new Uint8Array(hash))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
         const state=Array.from(env.crypto.getRandomValues(new Uint8Array(32)),x=>x.toString(16).padStart(2,'0')).join('');
