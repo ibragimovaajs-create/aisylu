@@ -2,7 +2,7 @@
 <html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light"><meta name="theme-color" content="#6d233e">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-csuRfDXsFqXOwTrRtkuoe5NINEHn8xwfOUPxkefAQXc=' 'sha256-fze4VuCOtiAklE+kq08D5jOGcDrLXnbNJqZ/ehjCYJE=' 'sha256-fUHMA8Twct+mywKm65w7SAD4Bi2boNQraQWBJ9EHvYs=' 'sha256-vaD/bSq2yfvY/NF9ykQuhn2EdKXLcMBijZx6CcBAxjU='; style-src 'unsafe-inline'; font-src data:; img-src data:; connect-src https://cloud-api.yandex.net https://*.yandex.net https://*.yandex.ru https://*.yandex.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-csuRfDXsFqXOwTrRtkuoe5NINEHn8xwfOUPxkefAQXc=' 'sha256-fze4VuCOtiAklE+kq08D5jOGcDrLXnbNJqZ/ehjCYJE=' 'sha256-wfNcKDAcPNeogJJAU7+ZWDUf6JLUxvGVfCH6k0fQ/Nk=' 'sha256-22b6w00vATulTUiP1Wxlb/HBSRzaLYE3PGKNwVePfvw='; style-src 'unsafe-inline'; font-src data:; img-src data:; connect-src https://cloud-api.yandex.net https://*.yandex.net https://*.yandex.ru https://*.yandex.com; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Мой ритм — питание, расходы и привычки</title>
 <!-- Embedded Caveat font license:
 Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat)
@@ -301,10 +301,17 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       this.status={kind:'off',text:'Яндекс Диск не подключён',savedAt:null};
     }
     report(kind,text){this.status={kind,text,savedAt:this.meta.savedAt||null};this.o.onStatus?.(this.status)}
-    async request(url,options={},authorized=false){
+    async request(url,options={},authorized=false,attempt=0){
       let response;
-      try{response=await this.o.fetch(url,{...options,credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(30000),headers:{...(authorized?{Authorization:'OAuth '+this.token,Accept:'application/json'}:{}),...options.headers}})}
-      catch(e){throw Error('Не удалось связаться с Яндекс Диском. Записи остаются в браузере; повтори синхронизацию позже.')}
+      const canRetry=(options.method||'GET')==='GET'&&attempt<2;
+      const retry=async()=>{
+        this.report('working','Связь прервалась. Повторяю запрос к Яндекс Диску…');
+        await (this.o.sleep||((ms)=>new Promise(resolve=>setTimeout(resolve,ms))))(800*(attempt+1));
+        return this.request(url,options,authorized,attempt+1);
+      };
+      try{response=await this.o.fetch(url,{...options,credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(20000),headers:{...(authorized?{Authorization:'OAuth '+this.token,Accept:'application/json'}:{}),...options.headers}})}
+      catch(e){if(canRetry)return retry();throw Error('Нет связи с Яндекс Диском. Записи сохранены в браузере; отправка повторится автоматически.')}
+      if(canRetry&&[408,429,502,503,504].includes(response.status))return retry();
       if(!response.ok){
         const error=Error(response.status===401?'Срок ключа Яндекса истёк. Получи новый ключ и подключи Диск снова.':response.status===403?'Яндекс не разрешил доступ. Нужен ключ приложения «Мой ритм» с доступом к своей папке.':response.status===507?'На Яндекс Диске закончилось место.':'Яндекс Диск ответил ошибкой '+response.status+'. Повтори позже.');
         error.status=response.status;throw error;
@@ -366,7 +373,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       return {...head,data,hash:x.hash,createdAt:x.createdAt};
     }
     keep(id,hash){
-      this.meta={...this.meta,head:id,hash,savedAt:new Date().toISOString()};this.o.saveMeta(this.meta);
+      this.meta={...this.meta,head:id,hash,savedAt:new Date().toISOString()};delete this.meta.pending;this.o.saveMeta(this.meta);
     }
     async conflictWith(remoteHeads){
       this.conflict={heads:remoteHeads,versions:[]};
@@ -376,10 +383,30 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     async write(data,parents){
       if(parents.length>6)throw Error('Обнаружено слишком много параллельных версий. Скачай резервную копию и обратись за помощью.');
       const id=crypto.randomUUID().replaceAll('-',''),name='s-'+id+'_'+(parents.join('_')||'root')+'.json';
-      const hash=await digest(stable(data)),body=JSON.stringify({format:'my-rhythm-cloud-v1',id,parents,hash,createdAt:new Date().toISOString(),data});
-      const link=await (await this.api('/resources/upload',{path:DIR+'/'+name,overwrite:false})).json();
-      await this.request(safeHref(link.href),{method:'PUT',body,headers:{'Content-Type':'application/json'}});
-      const verified=await this.read({id,name,parents});
+      const pending={id,name,parents,hash:await digest(stable(data)),createdAt:new Date().toISOString(),data};
+      // Persist the exact snapshot before sending: a lost response must not create a new branch.
+      this.meta={...this.meta,pending};this.o.saveMeta(this.meta);
+      return this.finishWrite(pending,false);
+    }
+    async finishWrite(pending,resume=true){
+      const {id,name,parents,hash,createdAt}=pending,data=this.o.validate(pending.data);
+      const parsed=parseName(name);
+      if(!parsed||parsed.id!==id||JSON.stringify(parsed.parents)!==JSON.stringify(parents)||await digest(stable(data))!==hash)throw Error('Не удалось проверить ожидающую отправки копию. Скачай резервную копию.');
+      let verified;
+      if(resume){
+        this.report('working','Проверяю сохранение после обрыва связи…');
+        try{verified=await this.read(pending)}catch(e){if(e.status!==404)throw e}
+      }
+      if(!verified){
+        this.report('working','Сохраняю записи на Яндекс Диск…');
+        const body=JSON.stringify({format:'my-rhythm-cloud-v1',id,parents,hash,createdAt,data});
+        try{
+          const link=await (await this.api('/resources/upload',{path:DIR+'/'+name,overwrite:false})).json();
+          await this.request(safeHref(link.href),{method:'PUT',body,headers:{'Content-Type':'application/json'}});
+        }catch(e){if(e.status!==409)throw e}
+        this.report('working','Проверяю сохранённую копию на Диске…');
+        verified=await this.read(pending);
+      }
       if(verified.hash!==hash)throw Error('Не удалось подтвердить сохранение файла.');
       this.keep(id,hash);
       const found=await this.listing();
@@ -390,6 +417,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       if(!this.ready||this.busy||this.conflict)return;
       clearTimeout(this.timer);this.busy=true;this.report('working','Синхронизация с Яндекс Диском…');
       try{
+        if(this.meta.pending){await this.finishWrite(this.meta.pending);if(this.conflict)return}
         const local=this.o.get(),localHash=await digest(stable(local)),found=await this.listing();
         if(found.length>1){await this.conflictWith(found);return}
         if(!found.length){
@@ -397,7 +425,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           if(this.meta.head){await this.conflictWith([]);return}
           await this.write(local,[]);
         }else{
-          const remote=await this.read(found[0]);
+          // Immutable, previously verified snapshots need only a directory check.
+          const remote=this.meta.head===found[0].id&&this.meta.hash?{...found[0],hash:this.meta.hash}:await this.read(found[0]);
           if(remote.hash===localHash)this.keep(remote.id,localHash);
           else if(this.meta.head===remote.id&&this.meta.hash){
             await this.write(local,[remote.id]);
@@ -890,7 +919,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       if(key==='cooking-check')state.cookingChecks[el.dataset.key]=el.checked;
       if(key==='marketplace')state.shops[Number(el.dataset.index)].marketplace=el.checked;
       if(key==='task')state.quarters[Number(el.dataset.quarter)].tasks.find(t=>t.id===el.dataset.id).done=el.checked;
-      if(key==='day-note')state.notes[ui.habitDate]=el.value;
+      if(key==='day-note'){if(state.notes[ui.habitDate]===el.value)return;state.notes[ui.habitDate]=el.value}
       if(key==='month-result'){
         const r=state.monthResults[ui.habitMonth]||(state.monthResults[ui.habitMonth]={});if(el.value==='')delete r[el.dataset.key];else {if(!el.validity.valid)throw Error('Укажи значение от 0.');r[el.dataset.key]=Number(el.value)}
       }
@@ -902,6 +931,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
   document.addEventListener('change',handleChange);
   let searchTimer;
   document.addEventListener('input',e=>{
+    if(e.target.dataset.change==='day-note'){state.notes[ui.habitDate]=e.target.value;save();}
     if(e.target.dataset.preview==='food')updateFoodPreview();
     if(e.target.dataset.search){
       const el=e.target,k=el.dataset.search,pos=el.selectionStart;ui[k]=el.value;clearTimeout(searchTimer);
@@ -925,7 +955,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
   dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close()}});
   render();
   cloud=new PlannerCloud.Sync({
-    fetch:window.fetch.bind(window),seed,validate:C.validate,get:()=>clone(state),editing:()=>dialog.open||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName),
+    fetch:window.fetch.bind(window),seed,validate:C.validate,get:()=>clone(state),editing:()=>(dialog.open&&!!dialog.querySelector('form'))||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName),
     requireExisting:()=>true,
     loadMeta:()=>{try{return JSON.parse(localStorage.getItem(KEY+':cloud-meta')||'null')}catch(e){return null}},
     saveMeta:m=>localStorage.setItem(KEY+':cloud-meta',JSON.stringify(m)),
@@ -947,6 +977,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
   }catch(e){toast('Не удалось сохранить подключение в браузере. Разреши хранение данных для этого сайта.')}
   window.addEventListener('online',()=>cloud.retry());
   window.addEventListener('focus',()=>cloud.retry());
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')cloud.retry()});
   setInterval(()=>{if(document.visibilityState==='visible')cloud.retry()},60000);
   window.addEventListener('beforeunload',e=>{if(cloud.ready&&(cloud.busy||['pending','error','conflict'].includes(cloud.status.kind))){e.preventDefault();e.returnValue='';}});
 })();
